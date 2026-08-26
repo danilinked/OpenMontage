@@ -1,8 +1,7 @@
-"""Seedance 2.0 (ByteDance) video generation via Replicate.
+"""Seedance 2.5 (ByteDance) video generation via Replicate.
 
-Replicate hosts ByteDance's published Seedance 2.0 models:
-  - bytedance/seedance-2.0        (standard)
-  - bytedance/seedance-2.0-fast   (fast tier)
+Replicate hosts ByteDance's published Seedance 2.5 model at
+bytedance/seedance-2.5 — no separate "fast" tier confirmed (unlike 2.0).
 
 Same model family as the fal.ai path (tools/video/seedance_video.py) —
 if you have both FAL_KEY and REPLICATE_API_TOKEN the scoring engine
@@ -32,7 +31,7 @@ from tools.base_tool import (
 
 class SeedanceReplicate(BaseTool):
     name = "seedance_replicate"
-    version = "0.1.0"
+    version = "0.2.0"
     tier = ToolTier.GENERATE
     capability = "video_generation"
     provider = "seedance"
@@ -64,6 +63,7 @@ class SeedanceReplicate(BaseTool):
     best_for = [
         "preferred premium video gen when REPLICATE_API_TOKEN is available",
         "cinematic trailers, teasers, and high-fidelity clips with native synchronized audio",
+        "native 30-second single-pass shots — no stitching seams",
         "director-level camera control and multi-shot editing in a single generation",
         "lip-sync from quoted dialogue in prompts",
         "consistent character identity across shots",
@@ -86,12 +86,16 @@ class SeedanceReplicate(BaseTool):
                 "type": "string",
                 "enum": ["standard", "fast"],
                 "default": "standard",
-                "description": "standard = bytedance/seedance-2.0, fast = bytedance/seedance-2.0-fast",
+                "description": "standard = bytedance/seedance-2.5. No confirmed fast tier for 2.5 yet — 'fast' still resolves to the standard model.",
             },
             "duration": {
                 "type": "string",
-                "enum": ["auto", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"],
+                "enum": [
+                    "auto", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
+                    "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+                ],
                 "default": "5",
+                "description": "Duration in seconds, up to 30 (native single-pass, no stitching). 'auto' lets the model decide.",
             },
             "aspect_ratio": {
                 "type": "string",
@@ -155,9 +159,9 @@ class SeedanceReplicate(BaseTool):
 
         start = time.time()
         variant = inputs.get("model_variant", "standard")
-        model_slug = (
-            "bytedance/seedance-2.0-fast" if variant == "fast" else "bytedance/seedance-2.0"
-        )
+        # No confirmed "fast" endpoint for 2.5 (unlike 2.0) — always resolve
+        # to the standard model regardless of model_variant.
+        model_slug = "bytedance/seedance-2.5"
 
         payload_input: dict[str, Any] = {"prompt": inputs["prompt"]}
         if inputs.get("duration") and inputs["duration"] != "auto":
@@ -204,7 +208,7 @@ class SeedanceReplicate(BaseTool):
             if status != "succeeded":
                 return ToolResult(
                     success=False,
-                    error=f"Replicate Seedance 2.0 generation {status}: {pred.get('error')}",
+                    error=f"Replicate Seedance 2.5 generation {status}: {pred.get('error')}",
                 )
 
             output = pred.get("output")
@@ -223,7 +227,7 @@ class SeedanceReplicate(BaseTool):
         except Exception as e:
             return ToolResult(
                 success=False,
-                error=f"Replicate Seedance 2.0 generation failed: {e}",
+                error=f"Replicate Seedance 2.5 generation failed: {e}",
             )
 
         from tools.video._shared import probe_output

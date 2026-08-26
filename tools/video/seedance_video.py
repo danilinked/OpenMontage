@@ -1,7 +1,20 @@
-"""Seedance 2.0 (ByteDance) video generation via fal.ai API.
+"""Seedance (ByteDance) video generation via fal.ai API.
 
-Best for cinematic clips with native audio, director-level camera control,
-and lip-sync from quoted dialogue in prompts.
+Default variant is 2.5 standard: cinematic clips with native audio,
+director-level camera control, lip-sync from quoted dialogue, native
+30-second single-pass generation (no stitching), and reference-to-video
+ceilings of 30 images + 10 videos + 10 audio clips.
+
+model_variant="mini" instead routes to the older, much cheaper Seedance
+2.0 Mini tier (bytedance/seedance-2.0/mini/*, ~$0.09/s at 720p vs 2.5's
+~$0.47/s) — use it when you don't need 2.5's longer single-pass duration
+or larger reference ceilings and just want a cheap clip. Mini's own
+duration/reference limits aren't independently confirmed here (fal.ai's
+docs don't spell them out beyond price) — if a call 400s, it's likely
+hitting a mini-specific ceiling narrower than what 2.5 supports.
+
+No confirmed "fast" endpoint for 2.5 (unlike 2.0) — "fast" is not a valid
+model_variant value; use "mini" for the budget path instead.
 """
 
 from __future__ import annotations
@@ -27,7 +40,7 @@ from tools.base_tool import (
 
 class SeedanceVideo(BaseTool):
     name = "seedance_video"
-    version = "0.2.0"
+    version = "0.4.0"
     tier = ToolTier.GENERATE
     capability = "video_generation"
     provider = "seedance"
@@ -61,12 +74,14 @@ class SeedanceVideo(BaseTool):
     best_for = [
         "preferred premium video gen when FAL_KEY is available",
         "cinematic trailers, teasers, and high-fidelity clips with native synchronized audio",
+        "native 30-second single-pass shots — no stitching seams",
         "director-level camera control and multi-shot editing in a single generation",
         "lip-sync from quoted dialogue in prompts",
-        "reference-conditioned generation (up to 9 images + 3 video clips + 3 audio clips)",
+        "reference-conditioned generation (up to 30 images + 10 video clips + 10 audio clips)",
         "consistent character identity across shots",
+        "model_variant='mini': same family at ~1/5 the price when you don't need 2.5's longer duration or reference ceilings",
     ]
-    not_good_for = ["offline generation", "budget-constrained projects"]
+    not_good_for = ["offline generation"]
     fallback_tools = ["veo_video", "kling_video", "minimax_video"]
     # Premium model — beat out "experimental stability" baseline. The scoring
     # engine reads quality_score directly when present (see lib/scoring.py).
@@ -84,15 +99,22 @@ class SeedanceVideo(BaseTool):
             },
             "model_variant": {
                 "type": "string",
-                "enum": ["standard", "fast"],
+                "enum": ["standard", "mini"],
                 "default": "standard",
-                "description": "standard = highest quality, fast = lower latency and cost",
+                "description": (
+                    "standard = Seedance 2.5 (highest quality, ~$0.47/s at 720p). "
+                    "mini = older, cheaper Seedance 2.0 Mini tier (~$0.09/s at 720p) — "
+                    "no native 30s single-pass or expanded reference ceilings."
+                ),
             },
             "duration": {
                 "type": "string",
-                "enum": ["auto", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"],
+                "enum": [
+                    "auto", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
+                    "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+                ],
                 "default": "5",
-                "description": "Duration in seconds. 'auto' lets the model decide.",
+                "description": "Duration in seconds, up to 30 (native single-pass, no stitching). 'auto' lets the model decide.",
             },
             "aspect_ratio": {
                 "type": "string",
@@ -124,7 +146,7 @@ class SeedanceVideo(BaseTool):
             "reference_image_urls": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Up to 9 reference image URLs for reference_to_video (identity / wardrobe / setting / style anchors).",
+                "description": "Up to 30 reference image URLs for reference_to_video (identity / wardrobe / setting / style anchors).",
             },
             "reference_image_paths": {
                 "type": "array",
@@ -134,12 +156,12 @@ class SeedanceVideo(BaseTool):
             "reference_video_urls": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Up to 3 reference video clip URLs for reference_to_video (motion / camera / pacing anchors).",
+                "description": "Up to 10 reference video clip URLs for reference_to_video (motion / camera / pacing anchors).",
             },
             "reference_audio_urls": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Up to 3 reference audio clip URLs for reference_to_video (voice / music / ambience anchors).",
+                "description": "Up to 10 reference audio clip URLs for reference_to_video (voice / music / ambience anchors).",
             },
             "seed": {
                 "type": "integer",
@@ -168,15 +190,23 @@ class SeedanceVideo(BaseTool):
         return ToolStatus.UNAVAILABLE
 
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
-        variant = inputs.get("model_variant", "standard")
+        # fal.ai pricing is per-second by resolution, and differs by
+        # generation for this family:
+        #   2.5 standard: ~$0.4730/s at 720p, ~$0.2205/s at 480p.
+        #   2.0 mini:     ~$0.0928/s at 720p, ~$0.0433/s at 480p.
         duration = inputs.get("duration", "5")
         secs = 5 if duration == "auto" else int(duration)
-        rate = 0.2419 if variant == "fast" else 0.3034
+        resolution = inputs.get("resolution", "720p")
+        variant = inputs.get("model_variant", "standard")
+        if variant == "mini":
+            rate = 0.0433 if resolution == "480p" else 0.0928
+        else:
+            rate = 0.2205 if resolution == "480p" else 0.4730
         return round(rate * secs, 2)
 
     def estimate_runtime(self, inputs: dict[str, Any]) -> float:
         variant = inputs.get("model_variant", "standard")
-        return 60.0 if variant == "fast" else 120.0
+        return 60.0 if variant == "mini" else 120.0
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         api_key = self._get_api_key()
@@ -193,10 +223,10 @@ class SeedanceVideo(BaseTool):
         variant = inputs.get("model_variant", "standard")
         operation_path = operation.replace("_", "-")
 
-        if variant == "fast":
-            model_path = f"bytedance/seedance-2.0/fast/{operation_path}"
+        if variant == "mini":
+            model_path = f"bytedance/seedance-2.0/mini/{operation_path}"
         else:
-            model_path = f"bytedance/seedance-2.0/{operation_path}"
+            model_path = f"bytedance/seedance-2.5/{operation_path}"
 
         payload: dict[str, Any] = {"prompt": inputs["prompt"]}
 
@@ -225,23 +255,28 @@ class SeedanceVideo(BaseTool):
             for local_path in inputs.get("reference_image_paths") or []:
                 from tools.video._shared import upload_image_fal
                 ref_image_urls.append(upload_image_fal(local_path))
-            # Seedance 2.0 reference-to-video ceilings: 9 images + 3 video + 3 audio.
-            if len(ref_image_urls) > 9:
+            # Reference-to-video ceilings differ by generation:
+            #   2.5 standard: 30 images + 10 video + 10 audio (confirmed).
+            #   2.0 mini: not independently confirmed — use 2.0's known
+            #   ceiling (9/3/3) as the conservative assumption.
+            img_cap, vid_cap, audio_cap = (9, 3, 3) if variant == "mini" else (30, 10, 10)
+            model_label = "Seedance 2.0 Mini" if variant == "mini" else "Seedance 2.5"
+            if len(ref_image_urls) > img_cap:
                 return ToolResult(
                     success=False,
-                    error=f"Seedance 2.0 reference_to_video accepts at most 9 reference images; got {len(ref_image_urls)}",
+                    error=f"{model_label} reference_to_video accepts at most {img_cap} reference images; got {len(ref_image_urls)}",
                 )
             ref_video_urls = list(inputs.get("reference_video_urls") or [])
-            if len(ref_video_urls) > 3:
+            if len(ref_video_urls) > vid_cap:
                 return ToolResult(
                     success=False,
-                    error=f"Seedance 2.0 reference_to_video accepts at most 3 reference videos; got {len(ref_video_urls)}",
+                    error=f"{model_label} reference_to_video accepts at most {vid_cap} reference videos; got {len(ref_video_urls)}",
                 )
             ref_audio_urls = list(inputs.get("reference_audio_urls") or [])
-            if len(ref_audio_urls) > 3:
+            if len(ref_audio_urls) > audio_cap:
                 return ToolResult(
                     success=False,
-                    error=f"Seedance 2.0 reference_to_video accepts at most 3 reference audio clips; got {len(ref_audio_urls)}",
+                    error=f"{model_label} reference_to_video accepts at most {audio_cap} reference audio clips; got {len(ref_audio_urls)}",
                 )
             if ref_image_urls:
                 payload["reference_image_urls"] = ref_image_urls
@@ -277,7 +312,7 @@ class SeedanceVideo(BaseTool):
                 if status in ("FAILED", "CANCELLED"):
                     return ToolResult(
                         success=False,
-                        error=f"Seedance 2.0 video generation {status.lower()}",
+                        error=f"Seedance ({variant}) video generation {status.lower()}",
                     )
 
             result_resp = requests.get(response_url, headers=headers, timeout=30)
@@ -295,7 +330,7 @@ class SeedanceVideo(BaseTool):
         except Exception as e:
             return ToolResult(
                 success=False,
-                error=f"Seedance 2.0 video generation failed: {e}",
+                error=f"Seedance ({variant}) video generation failed: {e}",
             )
 
         from tools.video._shared import probe_output

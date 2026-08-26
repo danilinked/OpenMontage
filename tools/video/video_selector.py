@@ -129,6 +129,16 @@ class VideoSelector(BaseTool):
                 "description": "Optional provenance metadata for custom workflow dependencies.",
             },
             "output_path": {"type": "string"},
+            "approve_cost": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Set true to authorize a spend that config.yaml's budget "
+                    "gate (single_action_approval_usd / first-use-per-tool) "
+                    "would otherwise block. Re-run with this set after a "
+                    "requires_approval response."
+                ),
+            },
         },
     }
 
@@ -216,7 +226,47 @@ class VideoSelector(BaseTool):
                 except Exception as e:
                     return ToolResult(success=False, error=f"Failed to upload reference image: {e}")
 
+        # Cost governance gate — reads config.yaml's budget section (see
+        # tools/cost_tracker.py). Every paid provider call goes through
+        # estimate -> reserve -> reconcile so config-driven approval
+        # thresholds and the total budget cap apply even to direct/manual
+        # selector calls, not only the (separately-invoked) real pipeline.
+        from tools.cost_tracker import ApprovalRequiredError, BudgetExceededError, CostTracker
+
+        try:
+            estimated_cost = tool.estimate_cost(adapted)
+        except Exception:
+            estimated_cost = 0.0
+
+        tracker = CostTracker.from_config()
+        entry_id = tracker.estimate(tool.name, str(adapted.get("operation", "text_to_video")), estimated_cost)
+
+        try:
+            tracker.reserve(entry_id, override_approval=bool(inputs.get("approve_cost")))
+        except (ApprovalRequiredError, BudgetExceededError) as e:
+            tracker.refund(entry_id)
+            return ToolResult(
+                success=False,
+                error=str(e),
+                data={
+                    "requires_approval": True,
+                    "selected_tool": tool.name,
+                    "selected_provider": tool.provider,
+                    "estimated_cost_usd": round(estimated_cost, 4),
+                    "budget_remaining_usd": round(tracker.budget_remaining_usd, 4),
+                    "hint": "Re-run this same call with approve_cost: true to authorize this spend.",
+                    "alternatives_considered": [
+                        t.name for t in candidates
+                        if t.name != tool.name and t.get_status().value == "available"
+                    ],
+                },
+            )
+
         result = tool.execute(adapted)
+
+        actual_cost = result.cost_usd if result.cost_usd is not None else estimated_cost
+        tracker.reconcile(entry_id, actual_cost, success=result.success)
+
         if result.success:
             result.data.setdefault("selected_tool", tool.name)
             result.data["selected_provider"] = tool.provider
@@ -228,6 +278,8 @@ class VideoSelector(BaseTool):
                 t.name for t in candidates
                 if t.name != tool.name and t.get_status().value == "available"
             ]
+            result.data["cost_usd"] = round(actual_cost, 4)
+            result.data["budget_remaining_usd"] = round(tracker.budget_remaining_usd, 4)
         return result
 
     def _select_best_tool(

@@ -61,6 +61,23 @@ class CostTracker:
         if cost_log_path and cost_log_path.exists():
             self._load()
 
+    @classmethod
+    def from_config(cls, cost_log_path: Optional[Path] = None) -> "CostTracker":
+        """Build a tracker using the repo's config.yaml budget section."""
+        from lib.config_model import OpenMontageConfig
+
+        budget = OpenMontageConfig.load().budget
+        if cost_log_path is None:
+            cost_log_path = Path(__file__).resolve().parent.parent / "cost_log.json"
+        return cls(
+            budget_total_usd=budget.total_usd,
+            reserve_pct=budget.reserve_pct,
+            single_action_approval_usd=budget.single_action_approval_usd,
+            require_approval_for_new_paid_tool=budget.require_approval_for_new_paid_tool,
+            mode=budget.mode,
+            cost_log_path=cost_log_path,
+        )
+
     # ---- Budget calculations ----
 
     @property
@@ -114,30 +131,39 @@ class CostTracker:
         self._save()
         return entry_id
 
-    def reserve(self, entry_id: str) -> None:
+    def reserve(self, entry_id: str, override_approval: bool = False) -> None:
         """Reserve budget for an estimated entry.
 
         Raises BudgetExceededError in cap mode, or ApprovalRequiredError
-        when the action exceeds the single-action approval threshold.
+        when the action exceeds the single-action approval threshold or is
+        a first paid use of a new tool. `override_approval=True` is the only
+        way past either check for a specific call — without it, approving a
+        tool once via `approve_tool()` alone does NOT clear the single-action
+        threshold, since that check is about the amount, not the tool. The
+        total-budget cap (CAP mode) still applies even with an override —
+        a one-off approval isn't authority to blow the total budget.
         """
         entry = self._find(entry_id)
         estimated = entry["estimated_usd"]
 
-        # Check single-action approval threshold
-        if estimated > self.single_action_approval_usd:
-            if self.mode != BudgetMode.OBSERVE:
-                raise ApprovalRequiredError(
-                    f"Action costs ${estimated:.2f}, exceeds "
-                    f"single-action threshold ${self.single_action_approval_usd:.2f}"
-                )
-
-        # Check new paid tool approval
-        if self.require_approval_for_new_paid_tool and estimated > 0:
-            if entry["tool"] not in self._approved_tools:
+        if not override_approval:
+            # Check single-action approval threshold
+            if estimated > self.single_action_approval_usd:
                 if self.mode != BudgetMode.OBSERVE:
                     raise ApprovalRequiredError(
-                        f"First paid use of tool {entry['tool']!r} requires approval"
+                        f"Action costs ${estimated:.2f}, exceeds "
+                        f"single-action threshold ${self.single_action_approval_usd:.2f}"
                     )
+
+            # Check new paid tool approval
+            if self.require_approval_for_new_paid_tool and estimated > 0:
+                if entry["tool"] not in self._approved_tools:
+                    if self.mode != BudgetMode.OBSERVE:
+                        raise ApprovalRequiredError(
+                            f"First paid use of tool {entry['tool']!r} requires approval"
+                        )
+        elif estimated > 0:
+            self._approved_tools.add(entry["tool"])
 
         # Check budget
         if estimated > self.usable_budget_usd:
@@ -487,6 +513,7 @@ class CostTracker:
             "budget_total_usd": self.budget_total_usd,
             "budget_reserved_usd": round(self.budget_reserved_usd, 4),
             "budget_spent_usd": round(self.budget_spent_usd, 4),
+            "approved_tools": sorted(self._approved_tools),
             "entries": self.entries,
         }
         self.cost_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -498,6 +525,10 @@ class CostTracker:
             data = json.load(f)
         self.entries = data.get("entries", [])
         self.budget_total_usd = data.get("budget_total_usd", self.budget_total_usd)
+        # Without this, approvals granted in a prior process (every CLI/tool
+        # invocation is a fresh CostTracker instance) would be forgotten and
+        # "first paid use" approval would fire again on every single call.
+        self._approved_tools = set(data.get("approved_tools", []))
 
     # ---- Helpers ----
 

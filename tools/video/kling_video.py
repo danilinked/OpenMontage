@@ -56,6 +56,14 @@ class KlingVideo(BaseTool):
     ]
     not_good_for = ["budget-constrained projects", "offline generation", "quick iteration"]
     fallback_tools = ["minimax_video", "veo_video", "wan_video"]
+    # Without this, the scoring engine falls back to the stability-based
+    # default (EXPERIMENTAL -> 0.4), which conflates API maturity with
+    # actual visual output quality and unfairly buries Kling under premium
+    # providers even on tasks that don't need their extra (costlier)
+    # native-audio/lip-sync features. Kling's real visual fidelity is high —
+    # it just lacks native audio/lip-sync/multi-shot, which the video-specific
+    # premium-cinematic bonus in lib/scoring.py already accounts for.
+    quality_score = 0.80
 
     input_schema = {
         "type": "object",
