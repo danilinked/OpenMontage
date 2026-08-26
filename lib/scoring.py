@@ -502,20 +502,35 @@ def score_provider(tool, task_context: dict[str, Any]) -> ProviderScore:
         cinematic_signal = bool(
             intent_words & {"cinematic", "film", "movie", "trailer", "teaser", "dramatic", "epic", "premium"}
         )
-        if cinematic_signal:
-            premium_features = [
-                supports.get("native_audio"),
-                supports.get("multi_shot"),
-                supports.get("camera_direction"),
-                supports.get("lip_sync"),
-                supports.get("cinematic_quality"),
-            ]
-            matched = sum(1 for f in premium_features if f)
+        needs_premium = (
+            cinematic_signal
+            or bool(task_context.get("needs_native_audio"))
+            or bool(task_context.get("needs_lip_sync"))
+        )
+        premium_features = [
+            supports.get("native_audio"),
+            supports.get("multi_shot"),
+            supports.get("camera_direction"),
+            supports.get("lip_sync"),
+            supports.get("cinematic_quality"),
+        ]
+        matched = sum(1 for f in premium_features if f)
+        if needs_premium:
             if matched >= 3:
                 task_fit = min(1.0, task_fit + 0.15)
                 output_quality = min(1.0, output_quality + 0.10)
             elif matched >= 1:
                 task_fit = min(1.0, task_fit + 0.05)
+        elif matched >= 3 and estimated_cost > 0.15:
+            # Symmetric case: no cinematic/audio/lip-sync signal in the brief
+            # — don't let a provider's premium multi-feature price tag (native
+            # audio, lip-sync, director camera control) buy it the top spot
+            # on a plain clip that uses none of that. Without this, providers
+            # like Seedance kept winning purely on a flat high quality_score
+            # even for silent b-roll/portrait clips a cheaper provider
+            # (e.g. Kling) handles just as well for a fraction of the cost.
+            task_fit = max(0.0, task_fit - 0.12)
+            output_quality = max(0.0, output_quality - 0.10)
 
     return ProviderScore(
         tool_name=info.get("name", "unknown"),

@@ -10,6 +10,9 @@ build/
 *.onnx
 *.onnx.json
 
+# Cost tracker state (per-machine spend log, not source)
+cost_log.json
+
 # Test/IDE
 .pytest_cache/
 .mypy_cache/
