@@ -38,6 +38,10 @@ class BudgetConfig(BaseModel):
     reserve_pct: float = 0.10
     single_action_approval_usd: float = 0.50
     require_approval_for_new_paid_tool: bool = True
+    # Apply the approval gate to direct selector calls too, not only to
+    # pipeline runs. Off by default: a bare selector call is a routing
+    # primitive, and gating it changes the contract its callers rely on.
+    gate_direct_selector_calls: bool = False
 
 
 class CheckpointConfig(BaseModel):

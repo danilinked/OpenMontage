@@ -10,8 +10,9 @@ budget:
   mode: warn                     # observe | warn | cap
   total_usd: 10.00
   reserve_pct: 0.10              # holdback for retries / cleanup
-  single_action_approval_usd: 0.50
+  single_action_approval_usd: 0.20
   require_approval_for_new_paid_tool: true
+  gate_direct_selector_calls: false   # true = video_selector enforces the gate too
 
 checkpoint:
   policy: guided                 # guided | manual_all | auto_noncreative
