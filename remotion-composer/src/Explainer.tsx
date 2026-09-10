@@ -30,6 +30,7 @@ import type { TerminalStep } from "./components/TerminalScene";
 import { ScreenshotScene } from "./components/ScreenshotScene";
 import type { ScreenshotStep } from "./components/ScreenshotScene";
 import { ProviderChip } from "./components/ProviderChip";
+import { MeasureScene } from "./components/MeasureScene";
 import { resolveAsset } from "./lib/resolveAsset";
 import type { ParticleType } from "./components/ParticleOverlay";
 import { resolveTheme, type ThemeConfig, DEFAULT_THEME } from "./Root";
@@ -194,6 +195,17 @@ interface Cut {
   out_seconds: number;
   layer?: string;
   type?: string;
+  // Measure props — dimension-line overlay drawn over the cut's backgroundImage
+  orientation?: "horizontal" | "vertical";
+  from?: number;
+  to?: number;
+  offset?: number;
+  label?: string;
+  excludeFrom?: number;
+  excludeTo?: number;
+  excludeLabel?: string;
+  kicker?: string;
+  subtitleColor?: string;
   // Component-specific props
   text?: string;
   stat?: string;
@@ -596,6 +608,23 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
       <TextCard text={cut.text} fontSize={cut.fontSize} color={textColor} backgroundColor={bgColor} />
     );
   }
+  if (cut.type === "measure") {
+    return maybeWrapWithBg(
+      <MeasureScene
+        orientation={cut.orientation}
+        from={cut.from}
+        to={cut.to}
+        offset={cut.offset}
+        label={cut.label}
+        kicker={cut.kicker}
+        excludeFrom={cut.excludeFrom}
+        excludeTo={cut.excludeTo}
+        excludeLabel={cut.excludeLabel}
+        accentColor={accent}
+        textColor={textColor}
+      />
+    );
+  }
   if (cut.type === "stat_card" && cut.stat) {
     return maybeWrapWithBg(
       <StatCard stat={cut.stat} subtitle={cut.subtitle} accentColor={accent} backgroundColor={bgColor} />
@@ -627,8 +656,12 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
         subtitle={cut.heroSubtitle || cut.subtitle}
         accentColor={accent}
         textColor={textColor}
-        subtitleColor={theme.mutedTextColor}
-        scrimBackground={heroScrim(theme)}
+        subtitleColor={cut.subtitleColor || theme.mutedTextColor}
+        // A hero over photo/video already has the cut's own overlay for
+        // contrast; the theme scrim on top of it only washes the image out.
+        scrimBackground={
+          cut.backgroundImage || cut.backgroundVideo ? "transparent" : heroScrim(theme)
+        }
       />
     );
   }
